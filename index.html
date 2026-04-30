@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Typing Level Analyzer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="page-shell">
+    <section class="app-layout" aria-label="Typing level analyzer">
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">One minute typing assessment</p>
+          <h1>Typing Level Analyzer</h1>
+        </div>
+        <button id="restartButton" class="restart-button" type="button">Restart</button>
+      </header>
+
+      <section class="scoreboard" aria-label="Live score">
+        <article class="timer-card">
+          <div id="timerRing" class="timer-ring" style="--progress: 1">
+            <strong id="timeValue">60</strong>
+            <span>seconds</span>
+          </div>
+        </article>
+        <article class="metric-card">
+          <strong id="wpmValue">0</strong>
+          <span>words/min</span>
+        </article>
+        <article class="metric-card">
+          <strong id="cpmValue">0</strong>
+          <span>chars/min</span>
+        </article>
+        <article class="metric-card">
+          <strong id="accuracyValue">0</strong>
+          <span>% accuracy</span>
+        </article>
+      </section>
+
+      <section class="typing-zone" aria-label="Typing area">
+        <div id="startTip" class="start-tip">Start typing in the paragraph below</div>
+        <div id="wordTrack" class="word-track" tabindex="0" role="textbox" aria-label="Typing prompt"></div>
+        <input
+          id="typingInput"
+          class="typing-input"
+          type="text"
+          autocomplete="off"
+          autocapitalize="none"
+          spellcheck="false"
+          aria-label="Typing input"
+        >
+      </section>
+
+      <section id="resultPanel" class="result-panel" hidden>
+        <div>
+          <p class="eyebrow">Final Result</p>
+          <h2 id="levelValue">Beginner Level</h2>
+        </div>
+        <div class="result-stats">
+          <span>WPM <strong id="finalWpmValue">0</strong></span>
+          <span>CPM <strong id="finalCpmValue">0</strong></span>
+          <span>Accuracy <strong id="finalAccuracyValue">0%</strong></span>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const TEST_SECONDS = 60;
+    const API_BASE = window.location.protocol === "file:" ? "http://127.0.0.1:8000" : "";
+
+    const state = {
+      sessionId: "",
+      words: [],
+      attempts: [],
+      currentIndex: 0,
+      currentTyped: "",
+      secondsLeft: TEST_SECONDS,
+      timerId: null,
+      startedAt: null,
+      started: false,
+      finished: false,
+      correctWords: 0,
+      characters: 0,
+    };
+
+    const els = {
+      wordTrack: document.querySelector("#wordTrack"),
+      input: document.querySelector("#typingInput"),
+      restart: document.querySelector("#restartButton"),
+      startTip: document.querySelector("#startTip"),
+      timerRing: document.querySelector("#timerRing"),
+      time: document.querySelector("#timeValue"),
+      wpm: document.querySelector("#wpmValue"),
+      cpm: document.querySelector("#cpmValue"),
+      accuracy: document.querySelector("#accuracyValue"),
+      result: document.querySelector("#resultPanel"),
+      level: document.querySelector("#levelValue"),
+      finalWpm: document.querySelector("#finalWpmValue"),
+      finalCpm: document.querySelector("#finalCpmValue"),
+      finalAccuracy: document.querySelector("#finalAccuracyValue"),
+    };
+
+    async function loadSession() {
+      stopTimer();
+      resetState();
+      showLoading();
+
+      try {
+        const response = await fetch(`${API_BASE}/api/session`);
+        if (!response.ok) throw new Error("Could not start a typing session.");
+        const session = await response.json();
+
+        state.sessionId = session.session_id;
+        state.words = session.words;
+        state.secondsLeft = session.seconds || TEST_SECONDS;
+        renderWords();
+        updateStats();
+        focusTyping();
+      } catch (error) {
+        els.wordTrack.innerHTML = `<span class="load-error">${error.message}</span>`;
+      }
+    }
+
+    function resetState() {
+      Object.assign(state, {
+        sessionId: "",
+        words: [],
+        attempts: [],
+        currentIndex: 0,
+        currentTyped: "",
+        secondsLeft: TEST_SECONDS,
+        timerId: null,
+        startedAt: null,
+        started: false,
+        finished: false,
+        correctWords: 0,
+        characters: 0,
+      });
+
+      els.input.value = "";
+      els.input.disabled = false;
+      els.startTip.hidden = false;
+      els.result.hidden = true;
+      updateStats();
+    }
+
+    function showLoading() {
+      els.wordTrack.innerHTML = '<span class="load-error">Loading words...</span>';
+    }
+
+    function renderWords() {
+      els.wordTrack.innerHTML = "";
+      state.words.forEach((word, index) => {
+        const item = document.createElement("span");
+        item.className = "word";
+        item.dataset.index = index;
+        item.dataset.word = word;
+        item.textContent = word;
+        els.wordTrack.appendChild(item);
+      });
+      paintCurrentWord();
+    }
+
+    function focusTyping() {
+      els.input.focus({ preventScroll: true });
+    }
+
+    function startTimer() {
+      if (state.started) return;
+      state.started = true;
+      state.startedAt = Date.now();
+      els.startTip.hidden = true;
+
+      state.timerId = window.setInterval(() => {
+        const elapsed = getElapsedSeconds();
+        state.secondsLeft = Math.max(0, TEST_SECONDS - elapsed);
+        updateStats();
+
+        if (state.secondsLeft === 0) {
+          finishTest();
+        }
+      }, 250);
+    }
+
+    function stopTimer() {
+      if (state.timerId) {
+        window.clearInterval(state.timerId);
+        state.timerId = null;
+      }
+    }
+
+    function handleKeydown(event) {
+      if (state.finished || !state.words.length) return;
+
+      const isCharacter = event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
+      const isActionKey = event.key === "Backspace" || event.key === " " || event.key === "Enter";
+      if (!isCharacter && !isActionKey) return;
+
+      event.preventDefault();
+      startTimer();
+
+      if (event.key === "Backspace") {
+        state.currentTyped = state.currentTyped.slice(0, -1);
+        paintCurrentWord();
+        return;
+      }
+
+      if (event.key === " " || event.key === "Enter") {
+        completeCurrentWord();
+        return;
+      }
+
+      state.currentTyped += event.key.toLowerCase();
+      paintCurrentWord();
+    }
+
+    function completeCurrentWord() {
+      const expected = currentWord();
+      if (!expected) {
+        finishTest();
+        return;
+      }
+
+      const typed = state.currentTyped.trim().toLowerCase();
+      const isCorrect = typed === expected;
+      const element = wordElementAt(state.currentIndex);
+
+      state.attempts.push({ index: state.currentIndex, typed });
+      element.className = `word ${isCorrect ? "correct" : "skipped"}`;
+
+      if (isCorrect) {
+        state.correctWords += 1;
+        state.characters += expected.length;
+      }
+
+      state.currentIndex += 1;
+      state.currentTyped = "";
+      updateStats();
+
+      if (state.currentIndex >= state.words.length) {
+        finishTest();
+      } else {
+        paintCurrentWord();
+      }
+    }
+
+    function paintCurrentWord() {
+      document.querySelectorAll(".word.active").forEach((word) => {
+        word.classList.remove("active", "mistyped");
+        word.textContent = word.dataset.word;
+      });
+
+      const element = wordElementAt(state.currentIndex);
+      const expected = currentWord();
+      if (!element || !expected) return;
+
+      const typed = state.currentTyped;
+      const typedPart = expected.slice(0, typed.length);
+      const restPart = expected.slice(typed.length);
+      const hasMistake = typed.length > 0 && !expected.startsWith(typed);
+      const visibleTyped = hasMistake ? typed : typedPart;
+      const visibleRest = hasMistake ? expected.slice(Math.min(typed.length, expected.length)) : restPart;
+
+      element.classList.add("active");
+      element.classList.toggle("mistyped", hasMistake);
+      element.innerHTML = `<span class="typed">${escapeHtml(visibleTyped)}</span><span class="caret"></span><span>${escapeHtml(visibleRest)}</span>`;
+    }
+
+    function updateStats() {
+      const elapsed = getElapsedSeconds();
+      const elapsedMinutes = Math.max(1 / 60, elapsed / 60);
+      const visited = state.attempts.length;
+      const accuracy = visited ? Math.round((state.correctWords / visited) * 100) : 0;
+      const progress = state.secondsLeft / TEST_SECONDS;
+
+      els.time.textContent = state.secondsLeft;
+      els.wpm.textContent = Math.round(state.correctWords / elapsedMinutes);
+      els.cpm.textContent = Math.round(state.characters / elapsedMinutes);
+      els.accuracy.textContent = accuracy;
+      els.timerRing.style.setProperty("--progress", progress);
+    }
+
+    async function finishTest() {
+      if (state.finished) return;
+      state.finished = true;
+      stopTimer();
+      els.input.disabled = true;
+
+      const response = await fetch(`${API_BASE}/api/result`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: state.sessionId,
+          attempts: state.attempts,
+          elapsed_seconds: getElapsedSeconds(),
+        }),
+      });
+
+      const result = await response.json();
+      if (result.error) {
+        els.level.textContent = result.error;
+        els.result.hidden = false;
+        return;
+      }
+
+      els.level.textContent = `${result.level} Level`;
+      els.wpm.textContent = result.words_per_minute;
+      els.cpm.textContent = result.chars_per_minute;
+      els.accuracy.textContent = Math.round(result.accuracy);
+      els.finalWpm.textContent = result.words_per_minute;
+      els.finalCpm.textContent = result.chars_per_minute;
+      els.finalAccuracy.textContent = `${Math.round(result.accuracy)}%`;
+      els.result.hidden = false;
+    }
+
+    function currentWord() {
+      return state.words[state.currentIndex] || "";
+    }
+
+    function wordElementAt(index) {
+      return els.wordTrack.querySelector(`[data-index="${index}"]`);
+    }
+
+    function getElapsedSeconds() {
+      if (!state.startedAt) return 0;
+      return Math.min(TEST_SECONDS, Math.max(1, Math.floor((Date.now() - state.startedAt) / 1000)));
+    }
+
+    function escapeHtml(value) {
+      return value.replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;",
+      })[char]);
+    }
+
+    els.input.addEventListener("keydown", handleKeydown);
+    els.wordTrack.addEventListener("click", focusTyping);
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest("button")) focusTyping();
+    });
+    els.restart.addEventListener("click", loadSession);
+
+    loadSession();
+  </script>
+</body>
+</html>
