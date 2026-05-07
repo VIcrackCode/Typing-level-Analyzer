@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Typing Level Analyzer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="page-shell">
+    <section class="app-layout" aria-label="Typing level analyzer">
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">Professional typing performance analyzer</p>
+          <h1>Typing Level Analyzer</h1>
+        </div>
+        <div class="header-actions">
+          <div class="timer-controls" aria-label="Timer settings">
+            <button class="timer-option active" type="button" data-seconds="15">15s</button>
+            <button class="timer-option" type="button" data-seconds="45">45s</button>
+            <button class="timer-option" type="button" data-seconds="60">60s</button>
+            <label class="custom-timer-label">
+              <span>Custom</span>
+              <input id="customSecondsInput" type="number" min="10" max="600" value="60" aria-label="Custom timer in seconds">
+            </label>
+          </div>
+          <button id="restartButton" class="restart-button" type="button">Restart</button>
+        </div>
+      </header>
+
+      <section class="scoreboard" aria-label="Live score">
+        <article class="timer-card">
+          <div id="timerRing" class="timer-ring" style="--progress: 1">
+            <strong id="timeValue">60</strong>
+            <span>seconds</span>
+          </div>
+        </article>
+        <article class="metric-card">
+          <strong id="wpmValue">0</strong>
+          <span>words/min</span>
+        </article>
+        <article class="metric-card">
+          <strong id="cpmValue">0</strong>
+          <span>chars/min</span>
+        </article>
+        <article class="metric-card">
+          <strong id="accuracyValue">0</strong>
+          <span>% accuracy</span>
+        </article>
+      </section>
+
+      <section class="typing-zone" aria-label="Typing area">
+        <div id="startTip" class="start-tip">Start typing in the paragraph below</div>
+        <div id="wordTrack" class="word-track" tabindex="0" role="textbox" aria-label="Typing prompt"></div>
+        <input
+          id="typingInput"
+          class="typing-input"
+          type="text"
+          autocomplete="off"
+          autocapitalize="none"
+          spellcheck="false"
+          aria-label="Typing input"
+        >
+      </section>
+
+      <section id="resultPanel" class="result-panel" hidden>
+        <div>
+          <p class="eyebrow">Final Result</p>
+          <h2 id="levelValue">Beginner Level</h2>
+        </div>
+        <div class="result-stats">
+          <span>WPM <strong id="finalWpmValue">0</strong></span>
+          <span>CPM <strong id="finalCpmValue">0</strong></span>
+          <span>Accuracy <strong id="finalAccuracyValue">0%</strong></span>
+          <span>Errors/min <strong id="finalErrorsValue">0</strong></span>
+        </div>
+        <p id="analysisNote" class="analysis-note">Analysis is normalized per minute.</p>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const DEFAULT_TEST_SECONDS = 60;
+    const MIN_TEST_SECONDS = 10;
+    const MAX_TEST_SECONDS = 600;
+    const WORDS_POOL = [
+      "apple", "banana", "computer", "keyboard", "python", "screen", "internet",
+      "science", "engineer", "project", "development", "programming", "logic",
+      "algorithm", "network", "database", "function", "variable", "object",
+      "class", "method", "loop", "condition", "array", "string", "integer",
+      "compile", "execute", "memory", "storage", "cloud", "system", "design",
+      "structure", "testing", "debug", "performance", "security", "data",
+      "analysis", "model", "training", "learning", "automation", "software",
+      "able", "acid", "aged", "also", "area", "army", "away", "baby", "back",
+      "ball", "band", "bank", "base", "bath", "bear", "beat", "been", "beer",
+      "bell", "belt", "best", "bill", "bird", "blow", "blue", "boat", "body",
+      "bond", "bone", "book", "boom", "born", "boss", "both", "bowl", "bulk",
+      "burn", "bush", "busy", "call", "calm", "came", "camp", "card", "care",
+      "case", "cash", "cast", "cell", "chat", "chip", "city", "club", "coal",
+      "coat", "code", "cold", "come", "cook", "cool", "cope", "copy", "core",
+      "cost", "crew", "crop", "dark", "date", "dawn", "days", "dead", "deal",
+      "dean", "dear", "debt", "deep", "deny", "desk", "dial", "diet", "disc",
+      "disk", "does", "done", "door", "dose", "down", "draw", "drew", "drop",
+      "drug", "dual", "duke", "dust", "duty", "each", "earn", "ease", "east",
+      "easy", "edge", "else", "even", "ever", "evil", "exit", "face", "fact",
+      "fail", "fair", "fall", "farm", "fast", "fate", "fear", "feed", "feel",
+      "feet", "fell", "felt", "file", "fill", "film", "find", "fine", "fire",
+      "firm", "fish", "five", "flat", "flow", "food", "foot", "ford", "form",
+      "fort", "four", "free", "from", "fuel", "full", "fund", "gain", "game",
+      "gate", "gave", "gear", "gene", "gift", "girl", "give", "glad", "goal",
+      "goes", "gold", "golf", "gone", "good", "gray", "grew", "grey", "grow",
+      "gulf", "hair", "half", "hall", "hand", "hang", "hard", "harm", "hate",
+      "have", "head", "hear", "heat", "held", "help", "here", "hero", "high",
+      "hill", "hire", "hold", "hole", "home", "hope", "host", "hour", "huge",
+      "idea", "input", "level", "local", "quick", "quiet", "right", "skill",
+      "space", "speed", "start", "today", "touch", "track", "trust", "value",
+      "visit", "water", "where", "while", "world", "write", "wrong", "young"
+    ];
+    const WORD_COUNT = 400;
+
+    const state = {
+      words: [],
+      attempts: [],
+      currentIndex: 0,
+      currentTyped: "",
+      testSeconds: 15,
+      secondsLeft: 15,
+      timerId: null,
+      startedAt: null,
+      started: false,
+      finished: false,
+      correctWords: 0,
+      characters: 0,
+    };
+
+    const els = {
+      wordTrack: document.querySelector("#wordTrack"),
+      input: document.querySelector("#typingInput"),
+      restart: document.querySelector("#restartButton"),
+      startTip: document.querySelector("#startTip"),
+      timerRing: document.querySelector("#timerRing"),
+      time: document.querySelector("#timeValue"),
+      wpm: document.querySelector("#wpmValue"),
+      cpm: document.querySelector("#cpmValue"),
+      accuracy: document.querySelector("#accuracyValue"),
+      result: document.querySelector("#resultPanel"),
+      level: document.querySelector("#levelValue"),
+      finalWpm: document.querySelector("#finalWpmValue"),
+      finalCpm: document.querySelector("#finalCpmValue"),
+      finalAccuracy: document.querySelector("#finalAccuracyValue"),
+      finalErrors: document.querySelector("#finalErrorsValue"),
+      customSecondsInput: document.querySelector("#customSecondsInput"),
+      timerOptions: Array.from(document.querySelectorAll(".timer-option")),
+      analysisNote: document.querySelector("#analysisNote"),
+    };
+
+    function loadSession() {
+      stopTimer();
+      resetState();
+      state.words = generateWords();
+      state.secondsLeft = state.testSeconds;
+      els.customSecondsInput.value = state.testSeconds;
+      syncTimerButtons();
+      renderWords();
+      updateStats();
+      focusTyping();
+    }
+
+    function resetState() {
+      Object.assign(state, {
+        words: [],
+        attempts: [],
+        currentIndex: 0,
+        currentTyped: "",
+        secondsLeft: state.testSeconds,
+        timerId: null,
+        startedAt: null,
+        started: false,
+        finished: false,
+        correctWords: 0,
+        characters: 0,
+      });
+
+      els.input.value = "";
+      els.input.disabled = false;
+      els.startTip.hidden = false;
+      els.result.hidden = true;
+      updateStats();
+    }
+
+    function renderWords() {
+      els.wordTrack.innerHTML = "";
+      state.words.forEach((word, index) => {
+        const item = document.createElement("span");
+        item.className = "word";
+        item.dataset.index = index;
+        item.dataset.word = word;
+        item.textContent = word;
+        els.wordTrack.appendChild(item);
+      });
+      paintCurrentWord();
+    }
+
+    function focusTyping() {
+      els.input.focus({ preventScroll: true });
+    }
+
+    function startTimer() {
+      if (state.started) return;
+      state.started = true;
+      state.startedAt = Date.now();
+      els.startTip.hidden = true;
+
+      state.timerId = window.setInterval(() => {
+        const elapsed = getElapsedSeconds();
+        state.secondsLeft = Math.max(0, state.testSeconds - elapsed);
+        updateStats();
+
+        if (state.secondsLeft === 0) {
+          finishTest();
+        }
+      }, 250);
+    }
+
+    function stopTimer() {
+      if (state.timerId) {
+        window.clearInterval(state.timerId);
+        state.timerId = null;
+      }
+    }
+
+    function handleKeydown(event) {
+      if (state.finished || !state.words.length) return;
+
+      const isCharacter = event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
+      const isActionKey = event.key === "Backspace" || event.key === " " || event.key === "Enter";
+      if (!isCharacter && !isActionKey) return;
+
+      event.preventDefault();
+      startTimer();
+
+      if (event.key === "Backspace") {
+        state.currentTyped = state.currentTyped.slice(0, -1);
+        paintCurrentWord();
+        return;
+      }
+
+      if (event.key === " " || event.key === "Enter") {
+        completeCurrentWord();
+        return;
+      }
+
+      state.currentTyped += event.key.toLowerCase();
+      paintCurrentWord();
+    }
+
+    function completeCurrentWord() {
+      const expected = currentWord();
+      if (!expected) {
+        finishTest();
+        return;
+      }
+
+      const typed = state.currentTyped.trim().toLowerCase();
+      const isCorrect = typed === expected;
+      const element = wordElementAt(state.currentIndex);
+
+      state.attempts.push({ index: state.currentIndex, typed });
+      element.className = `word ${isCorrect ? "correct" : "skipped"}`;
+      element.textContent = expected;
+
+      if (isCorrect) {
+        state.correctWords += 1;
+        state.characters += expected.length;
+      }
+
+      state.currentIndex += 1;
+      state.currentTyped = "";
+      updateStats();
+
+      if (state.currentIndex >= state.words.length) {
+        finishTest();
+      } else {
+        paintCurrentWord();
+      }
+    }
+
+    function paintCurrentWord() {
+      clearActiveWord();
+
+      const element = wordElementAt(state.currentIndex);
+      const expected = currentWord();
+      if (!element || !expected) return;
+
+      const typed = state.currentTyped;
+      const typedPart = expected.slice(0, typed.length);
+      const restPart = expected.slice(typed.length);
+      const hasMistake = typed.length > 0 && !expected.startsWith(typed);
+      const visibleTyped = hasMistake ? typed : typedPart;
+      const visibleRest = hasMistake ? expected.slice(Math.min(typed.length, expected.length)) : restPart;
+
+      element.classList.add("active");
+      element.classList.toggle("mistyped", hasMistake);
+      element.innerHTML = `<span class="typed">${escapeHtml(visibleTyped)}</span><span class="caret"></span><span>${escapeHtml(visibleRest)}</span>`;
+    }
+
+    function clearActiveWord() {
+      document.querySelectorAll(".word.active").forEach((word) => {
+        word.classList.remove("active", "mistyped");
+        word.textContent = word.dataset.word;
+      });
+    }
+
+    function updateStats() {
+      const elapsed = getElapsedSeconds();
+      const elapsedMinutes = Math.max(1 / 60, elapsed / 60);
+      const visited = state.attempts.length;
+      const accuracy = visited ? Math.round((state.correctWords / visited) * 100) : 0;
+      const progress = state.secondsLeft / state.testSeconds;
+
+      els.time.textContent = state.secondsLeft;
+      els.wpm.textContent = Math.round(state.correctWords / elapsedMinutes);
+      els.cpm.textContent = Math.round(state.characters / elapsedMinutes);
+      els.accuracy.textContent = accuracy;
+      els.timerRing.style.setProperty("--progress", progress);
+    }
+
+    function finishTest() {
+      if (state.finished) return;
+      state.finished = true;
+      stopTimer();
+      clearActiveWord();
+      els.input.disabled = true;
+
+      const result = evaluateAttempts(state.words, state.attempts, getElapsedSeconds(), state.testSeconds);
+
+      els.level.textContent = `${result.level} Level`;
+      els.wpm.textContent = result.words_per_minute;
+      els.cpm.textContent = result.chars_per_minute;
+      els.accuracy.textContent = Math.round(result.accuracy);
+      els.finalWpm.textContent = result.words_per_minute;
+      els.finalCpm.textContent = result.chars_per_minute;
+      els.finalAccuracy.textContent = `${Math.round(result.accuracy)}%`;
+      els.finalErrors.textContent = result.errors_per_minute;
+      els.analysisNote.textContent = `Analysis normalized per minute from a ${state.testSeconds}s test.`;
+      els.result.hidden = false;
+    }
+
+    function currentWord() {
+      return state.words[state.currentIndex] || "";
+    }
+
+    function wordElementAt(index) {
+      return els.wordTrack.querySelector(`[data-index="${index}"]`);
+    }
+
+    function getElapsedSeconds() {
+      if (!state.startedAt) return 0;
+      return Math.min(state.testSeconds, Math.max(1, Math.floor((Date.now() - state.startedAt) / 1000)));
+    }
+
+    function sanitizeSeconds(value) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return DEFAULT_TEST_SECONDS;
+      return Math.min(MAX_TEST_SECONDS, Math.max(MIN_TEST_SECONDS, Math.round(parsed)));
+    }
+
+    function generateWords(count = WORD_COUNT) {
+      return Array.from({ length: count }, () => (
+        WORDS_POOL[Math.floor(Math.random() * WORDS_POOL.length)]
+      ));
+    }
+
+    function evaluateAttempts(words, attempts, elapsedSeconds, testSeconds) {
+      const visitedIndexes = new Set();
+      let correctWords = 0;
+      let characters = 0;
+
+      attempts.forEach((attempt) => {
+        const index = attempt.index;
+        const typed = String(attempt.typed || "").trim().toLowerCase();
+
+        if (!Number.isInteger(index) || index < 0 || index >= words.length || visitedIndexes.has(index)) {
+          return;
+        }
+
+        visitedIndexes.add(index);
+        if (typed === words[index]) {
+          correctWords += 1;
+          characters += words[index].length;
+        }
+      });
+
+      const visitedWords = visitedIndexes.size;
+      const boundedElapsedSeconds = Math.max(1, Math.min(elapsedSeconds, testSeconds));
+      const elapsedMinutes = boundedElapsedSeconds / 60;
+      const accuracy = visitedWords ? (correctWords / visitedWords) * 100 : 0;
+      const averageCharsPerCorrectWord = correctWords ? characters / correctWords : 0;
+      const minuteCoefficient = 60 / boundedElapsedSeconds;
+      const charsPerMinute = Math.round(averageCharsPerCorrectWord * minuteCoefficient * correctWords);
+      const wordsPerMinute = charsPerMinute ? Math.round(charsPerMinute / 5) : 0;
+      const errorsPerMinute = Math.round((visitedWords - correctWords) / elapsedMinutes);
+
+      return {
+        words_per_minute: wordsPerMinute,
+        chars_per_minute: charsPerMinute,
+        errors_per_minute: errorsPerMinute,
+        accuracy: Math.round(accuracy * 100) / 100,
+        level: getLevel(wordsPerMinute),
+      };
+    }
+
+    function getLevel(wordsPerMinute) {
+      if (wordsPerMinute < 20) return "Beginner";
+      if (wordsPerMinute < 40) return "Intermediate";
+      return "Master";
+    }
+
+    function syncTimerButtons() {
+      els.timerOptions.forEach((button) => {
+        const buttonSeconds = Number(button.dataset.seconds);
+        button.classList.toggle("active", buttonSeconds === state.testSeconds);
+      });
+    }
+
+    function selectTimerOption(seconds) {
+      state.testSeconds = sanitizeSeconds(seconds);
+      els.customSecondsInput.value = state.testSeconds;
+      syncTimerButtons();
+      loadSession();
+    }
+
+    function applyCustomTimer() {
+      selectTimerOption(els.customSecondsInput.value);
+    }
+
+    function escapeHtml(value) {
+      return value.replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;",
+      })[char]);
+    }
+
+    els.input.addEventListener("keydown", handleKeydown);
+    els.wordTrack.addEventListener("click", focusTyping);
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest("button")) focusTyping();
+    });
+    els.restart.addEventListener("click", loadSession);
+    els.customSecondsInput.addEventListener("change", applyCustomTimer);
+    els.customSecondsInput.addEventListener("blur", applyCustomTimer);
+    els.customSecondsInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") applyCustomTimer();
+    });
+    els.timerOptions.forEach((button) => {
+      button.addEventListener("click", () => selectTimerOption(button.dataset.seconds));
+    });
+    syncTimerButtons();
+
+    loadSession();
+  </script>
+</body>
+</html>
